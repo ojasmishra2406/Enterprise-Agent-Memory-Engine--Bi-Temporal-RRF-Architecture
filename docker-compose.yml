@@ -1,5 +1,6 @@
 services:
   db:
+    container_name: memory_engine_db
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: user
@@ -14,6 +15,7 @@ services:
       timeout: 5s
       retries: 5
   redis:
+    container_name: memory_engine_redis
     image: redis:7-alpine
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -21,6 +23,7 @@ services:
       timeout: 5s
       retries: 5
   api:
+    container_name: memory_engine_api
     image: python:3.12-slim
     working_dir: /app
     volumes:
@@ -38,6 +41,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
   mcp_server:
+    container_name: memory_engine_mcp
     image: python:3.12-slim
     working_dir: /app
     volumes:
