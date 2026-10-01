@@ -5,18 +5,22 @@ from app.models import Memory
 
 class LLMService:
     def __init__(self):
-        self.http_client = httpx.AsyncClient(base_url=settings.OLLAMA_BASE_URL, timeout=settings.LLM_TIMEOUT_SECONDS)
+        pass
+
+    def _get_client(self):
+        return httpx.AsyncClient(base_url=settings.OLLAMA_BASE_URL, timeout=settings.LLM_TIMEOUT_SECONDS)
 
     async def generate_embedding(self, text: str) -> list[float]:
-        res = await self.http_client.post("/api/embed", json={
-            "model": settings.EMBEDDING_MODEL,
-            "input": text
-        })
-        res.raise_for_status()
-        emb_data = res.json().get("embeddings", [])
-        if not emb_data or len(emb_data[0]) != settings.EMBEDDING_DIMENSIONS:
-            raise ValueError(f"Embedding length mismatch. Expected {settings.EMBEDDING_DIMENSIONS}")
-        return emb_data[0]
+        async with self._get_client() as client:
+            res = await client.post("/api/embed", json={
+                "model": settings.EMBEDDING_MODEL,
+                "input": text
+            })
+            res.raise_for_status()
+            emb_data = res.json().get("embeddings", [])
+            if not emb_data or len(emb_data[0]) != settings.EMBEDDING_DIMENSIONS:
+                raise ValueError(f"Embedding length mismatch. Expected {settings.EMBEDDING_DIMENSIONS}")
+            return emb_data[0]
 
     async def extract_salient_facts(self, messages: list[MessageTurn]) -> list[ExtractedFact]:
         system_prompt = """Extract salient, persistent facts, user preferences, episodic events, procedures, or tasks.
@@ -31,19 +35,20 @@ Score importance (0.0 to 1.0, where 0.0=trivial chatter, 1.0=critical constraint
 
         user_content = "\n".join([f"{m.role}: {m.content}" for m in messages])
         
-        res = await self.http_client.post("/api/chat", json={
-            "model": settings.EXTRACTION_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            "stream": False,
-            "options": {"temperature": 0.0},
-            "format": FactExtractionOutput.model_json_schema()
-        })
-        res.raise_for_status()
-        out_content = res.json()["message"]["content"]
-        return FactExtractionOutput.model_validate_json(out_content).facts
+        async with self._get_client() as client:
+            res = await client.post("/api/chat", json={
+                "model": settings.EXTRACTION_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                "stream": False,
+                "options": {"temperature": 0.0},
+                "format": FactExtractionOutput.model_json_schema()
+            })
+            res.raise_for_status()
+            out_content = res.json()["message"]["content"]
+            return FactExtractionOutput.model_validate_json(out_content).facts
 
     async def evaluate_contradiction(self, new_fact: ExtractedFact, candidates: list[Memory]) -> ContradictionDecision:
         system_prompt = """Evaluate if the new fact contradicts or updates any candidate memories.
@@ -57,18 +62,19 @@ CRITICAL: Never fabricate UUIDs. Use ONLY the exact UUIDs provided in the Candid
         cand_str = "\n".join(c_lines)
         user_content = f"New Fact: {new_fact.content}\nCandidates:\n{cand_str}"
         
-        res = await self.http_client.post("/api/chat", json={
-            "model": settings.EXTRACTION_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            "stream": False,
-            "options": {"temperature": 0.0},
-            "format": ContradictionDecision.model_json_schema()
-        })
-        res.raise_for_status()
-        out_content = res.json()["message"]["content"]
-        return ContradictionDecision.model_validate_json(out_content)
+        async with self._get_client() as client:
+            res = await client.post("/api/chat", json={
+                "model": settings.EXTRACTION_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                "stream": False,
+                "options": {"temperature": 0.0},
+                "format": ContradictionDecision.model_json_schema()
+            })
+            res.raise_for_status()
+            out_content = res.json()["message"]["content"]
+            return ContradictionDecision.model_validate_json(out_content)
 
 llm_service = LLMService()

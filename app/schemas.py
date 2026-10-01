@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import uuid
 import enum
 from app.models import MemoryType, TemporalState
@@ -11,7 +11,7 @@ class MessageTurn(BaseModel):
     timestamp: Optional[datetime] = None
 
 class IngestRequest(BaseModel):
-    tenant_id: str
+    model_config = ConfigDict(extra="forbid")
     agent_id: str
     session_id: str
     messages: list[MessageTurn]
@@ -70,7 +70,7 @@ class MemoryLineageResponse(BaseModel):
     history_chain: list[MemoryRecordResponse]
 
 class SearchRequest(BaseModel):
-    tenant_id: str
+    model_config = ConfigDict(extra="forbid")
     agent_id: str
     query: str
     limit: int = Field(default=10, ge=1, le=50)

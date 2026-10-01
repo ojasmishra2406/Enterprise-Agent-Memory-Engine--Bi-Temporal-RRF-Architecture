@@ -7,9 +7,9 @@ class Settings(BaseSettings):
     EXTRACTION_MODEL: str = "llama3.1:8b"
     EMBEDDING_MODEL: str = "bge-m3"
     EMBEDDING_DIMENSIONS: int = 1024
-    SIMILARITY_THRESHOLD: float = 0.82
+    SIMILARITY_THRESHOLD: float = 0.50
     CONTRADICTION_TOP_K: int = 5
-    LLM_TIMEOUT_SECONDS: float = 60.0
+    LLM_TIMEOUT_SECONDS: float = 300.0
     DECAY_RATE_PER_SECOND: float = 2.67e-7
     RRF_K: float = 60.0
     CANDIDATE_POOL_SIZE: int = 50

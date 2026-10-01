@@ -13,8 +13,8 @@ class RetrievalService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def hybrid_search(self, req: SearchRequest) -> list[SearchResult]:
-        logger.info("retrieval.hybrid_search.start", query=req.query, tenant_id=req.tenant_id, agent_id=req.agent_id)
+    async def hybrid_search(self, req: SearchRequest, tenant_id: str) -> list[SearchResult]:
+        logger.info("retrieval.hybrid_search.start", query=req.query, tenant_id=tenant_id, agent_id=req.agent_id)
         embedding = await llm_service.generate_embedding(req.query)
         embedding_str = f"[{','.join(map(str, embedding))}]"
 
@@ -22,12 +22,12 @@ class RetrievalService:
         WITH vector_search AS (
             SELECT 
                 id, content, memory_type, importance, confidence, valid_from,
-                RANK() OVER (ORDER BY embedding <=> :embedding_str::vector ASC) AS vector_rank
+                RANK() OVER (ORDER BY embedding <=> :embedding_str ::vector ASC) AS vector_rank
             FROM memories
             WHERE temporal_state = 'ACTIVE' 
               AND tenant_id = :tenant_id 
               AND agent_id = :agent_id
-            ORDER BY embedding <=> :embedding_str::vector ASC
+            ORDER BY embedding <=> :embedding_str ::vector ASC
             LIMIT :pool_size
         ),
         fts_search AS (
@@ -50,7 +50,7 @@ class RetrievalService:
                 COALESCE(v.importance, f.importance) AS importance,
                 COALESCE(v.confidence, f.confidence) AS confidence,
                 COALESCE(v.valid_from, f.valid_from) AS valid_from,
-                COALESCE(1.0 / (:rrf_k + v.vector_rank), 0.0) + COALESCE(1.0 / (:rrf_k + f.fts_rank), 0.0) AS rrf_score
+                COALESCE(1.0 / (:rrf_k ::float + v.vector_rank), 0.0) + COALESCE(1.0 / (:rrf_k ::float + f.fts_rank), 0.0) AS rrf_score
             FROM vector_search v
             FULL OUTER JOIN fts_search f ON v.id = f.id
         )
@@ -63,9 +63,9 @@ class RetrievalService:
             rrf_score,
             CASE 
                 WHEN memory_type IN ('EPISODIC', 'TASK') THEN
-                    rrf_score * importance * confidence * EXP(-:decay_rate * EXTRACT(EPOCH FROM (now() - valid_from)))
+                    rrf_score * (1.0 + (importance * 0.2)) * confidence * EXP(-(:decay_rate ::float) * EXTRACT(EPOCH FROM (now() - valid_from)))
                 ELSE
-                    rrf_score * importance * confidence
+                    rrf_score * (1.0 + (importance * 0.2)) * confidence
             END AS final_score
         FROM combined
         ORDER BY final_score DESC
@@ -74,7 +74,7 @@ class RetrievalService:
 
         result = await self.db.execute(sql_query, {
             "embedding_str": embedding_str,
-            "tenant_id": req.tenant_id,
+            "tenant_id": tenant_id,
             "agent_id": req.agent_id,
             "query": req.query,
             "limit": req.limit,

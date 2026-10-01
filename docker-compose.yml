@@ -49,7 +49,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: sh -c "pip install -r requirements.txt && python mcp_server.py"
+    command: sh -c "pip install -r requirements.txt && tail -f /dev/null"
     environment:
       - DATABASE_URL=postgresql+asyncpg://user:password@db:5432/memory_engine
       - REDIS_URL=redis://redis:6379/0

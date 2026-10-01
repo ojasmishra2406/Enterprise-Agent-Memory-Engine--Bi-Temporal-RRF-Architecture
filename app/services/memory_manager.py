@@ -10,7 +10,7 @@ class MemoryManager:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def ingest_transcript(self, req: IngestRequest) -> list[FactResolutionReport]:
+    async def ingest_transcript(self, req: IngestRequest, tenant_id: str) -> list[FactResolutionReport]:
         facts = await llm_service.extract_salient_facts(req.messages)
         reports = []
         for fact in facts:
@@ -19,7 +19,7 @@ class MemoryManager:
             sim_score = 1 - Memory.embedding.cosine_distance(embedding)
             search_stmt = (
                 select(Memory)
-                .where(Memory.tenant_id == req.tenant_id)
+                .where(Memory.tenant_id == tenant_id)
                 .where(Memory.agent_id == req.agent_id)
                 .where(Memory.temporal_state == TemporalState.ACTIVE)
                 .where(sim_score >= settings.SIMILARITY_THRESHOLD)
@@ -35,21 +35,30 @@ class MemoryManager:
                 reason_msg = "No candidates found."
                 upd_content = None
             else:
-                llm_dec = await llm_service.evaluate_contradiction(fact, candidate_list)
-                act = llm_dec.action
-                t_ids = [tid for tid in llm_dec.target_memory_ids if tid in valid_candidate_ids]
-                reason_msg = llm_dec.reason
-                upd_content = llm_dec.updated_content
+                # Deterministic check for exact duplicates to bypass LLM
+                exact_match = next((c for c in candidate_list if c.content.strip().lower() == fact.content.strip().lower()), None)
                 
-                if act == ResolutionAction.UPDATE and not t_ids:
-                    act = ResolutionAction.ADD
+                if exact_match:
+                    act = ResolutionAction.NONE
+                    t_ids = [exact_match.id]
+                    reason_msg = "Deterministic exact match bypass."
+                    upd_content = None
+                else:
+                    llm_dec = await llm_service.evaluate_contradiction(fact, candidate_list)
+                    act = llm_dec.action
+                    t_ids = [tid for tid in llm_dec.target_memory_ids if tid in valid_candidate_ids]
+                    reason_msg = llm_dec.reason
+                    upd_content = llm_dec.updated_content
+                    
+                    if act == ResolutionAction.UPDATE and not t_ids:
+                        act = ResolutionAction.ADD
 
             new_id = None
             super_ids = []
 
             if act == ResolutionAction.ADD:
                 n_mem = Memory(
-                    tenant_id=req.tenant_id,
+                    tenant_id=tenant_id,
                     agent_id=req.agent_id,
                     content=fact.content,
                     memory_type=fact.memory_type,
@@ -68,11 +77,11 @@ class MemoryManager:
                 fin_content = upd_content or fact.content
                 fin_emb = embedding if not upd_content else await llm_service.generate_embedding(fin_content)
                 
-                upd_stmt = select(Memory).where(Memory.id.in_(t_ids)).where(Memory.tenant_id == req.tenant_id).where(Memory.temporal_state == TemporalState.ACTIVE).with_for_update()
+                upd_stmt = select(Memory).where(Memory.id.in_(t_ids)).where(Memory.tenant_id == tenant_id).where(Memory.temporal_state == TemporalState.ACTIVE).with_for_update()
                 t_mems = (await self.db.scalars(upd_stmt)).all()
                 
                 n_mem = Memory(
-                    tenant_id=req.tenant_id,
+                    tenant_id=tenant_id,
                     agent_id=req.agent_id,
                     content=fin_content,
                     memory_type=fact.memory_type,
@@ -100,7 +109,7 @@ class MemoryManager:
                     
             elif act == ResolutionAction.NONE:
                 if t_ids:
-                    match_stmt = select(Memory).where(Memory.id == t_ids[0]).where(Memory.tenant_id == req.tenant_id).with_for_update()
+                    match_stmt = select(Memory).where(Memory.id == t_ids[0]).where(Memory.tenant_id == tenant_id).with_for_update()
                     m_mem = await self.db.scalar(match_stmt)
                     if m_mem:
                         m_mem.confidence = max(m_mem.confidence, fact.confidence)
@@ -108,6 +117,9 @@ class MemoryManager:
                         if req.session_id not in s_arr:
                             s_arr.append(req.session_id)
                         m_mem.source_provenance = {**m_mem.source_provenance, "seen_in_sessions": s_arr}
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(m_mem, "source_provenance")
+                        await self.db.flush()
                         new_id = m_mem.id
             
             reports.append(FactResolutionReport(
@@ -129,6 +141,7 @@ class MemoryManager:
         # 1. Walk forward to find the root active (or latest) memory
         curr = start_mem
         while curr.superseded_by_id:
+            print('DEBUG: Executing lineage loop!')
             fwd_stmt = select(Memory).where(Memory.id == curr.superseded_by_id, Memory.tenant_id == tenant_id)
             nxt = await self.db.scalar(fwd_stmt)
             if not nxt:
