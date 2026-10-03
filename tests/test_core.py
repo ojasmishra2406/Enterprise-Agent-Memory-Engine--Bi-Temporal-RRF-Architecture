@@ -151,3 +151,36 @@ async def test_get_memory_lineage(client: AsyncClient, db_session):
     history_ids = [m["id"] for m in lineage_data["history_chain"]]
     assert mem_id_1 in history_ids
 
+
+@pytest.mark.asyncio
+async def test_intra_batch_multi_fact_contradiction(client: AsyncClient, db_session):
+    # 1. Base fact
+    payload1 = {
+        "agent_id": "test_agent_multi",
+        "session_id": "sess_multi_1",
+        "messages": [{"role": "user", "content": "I have a dog named Buddy."}]
+    }
+    res1 = await client.post("/v1/memories/ingest", json=payload1, headers={"X-API-Key": "test_key_tenant_a"})
+    assert res1.status_code == 200
+    
+    # 2. Contradiction that generates multiple facts internally
+    payload2 = {
+        "agent_id": "test_agent_multi",
+        "session_id": "sess_multi_2",
+        "messages": [{"role": "user", "content": "Wait, I don't have a dog. I have a cat named Whiskers."}]
+    }
+    res2 = await client.post("/v1/memories/ingest", json=payload2, headers={"X-API-Key": "test_key_tenant_a"})
+    assert res2.status_code == 200
+    
+    # 3. Verify no memory is orphaned and the lineage is intact
+    results = res2.json()["results"]
+    for r in results:
+        m_id = r["memory_id"]
+        # If it updated something, the lineage must connect back properly
+        res_lineage = await client.get(f"/v1/memories/{m_id}/lineage", headers={"X-API-Key": "test_key_tenant_a"})
+        assert res_lineage.status_code == 200
+        data = res_lineage.json()
+        
+        # Lineage must not be empty if this fact superseded something
+        if r["action_taken"] == "UPDATE":
+            assert len(data["history_chain"]) > 0, f"Memory {m_id} was orphaned!"

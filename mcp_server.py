@@ -28,7 +28,11 @@ structlog.configure(
 )
 logger = structlog.get_logger(__name__)
 
-mcp = FastMCP("agent-memory-engine")
+logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.ERROR)
+logging.getLogger("fastmcp").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+mcp = FastMCP("agent-memory-engine", log_level="ERROR")
 
 @mcp.tool()
 async def ingest_conversation(tenant_id: str, agent_id: str, session_id: str, messages: list[dict], metadata: dict = None) -> str:

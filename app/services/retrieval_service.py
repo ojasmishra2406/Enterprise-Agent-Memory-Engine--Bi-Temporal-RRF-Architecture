@@ -1,4 +1,5 @@
 import uuid
+import time
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -6,6 +7,12 @@ from app.schemas import SearchRequest, SearchResult
 from app.models import MemoryType
 from app.services.llm_service import llm_service
 from app.config import settings
+
+try:
+    from sentence_transformers import CrossEncoder
+    _reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+except ImportError:
+    _reranker = None
 
 logger = structlog.get_logger(__name__)
 
@@ -95,6 +102,20 @@ class RetrievalService:
                 rrf_score=row.rrf_score,
                 final_score=row.final_score
             ))
-        
+            
+        if _reranker is not None and len(results) > 0:
+            start_t = time.perf_counter()
+            pairs = [[req.query, r.content] for r in results]
+            scores = _reranker.predict(pairs)
+            for r, s in zip(results, scores):
+                # We blend the original final_score (which contains decay/importance) with the cross-encoder score
+                # Min-max scale or just add them. For now, replacing the base score with the cross-encoder score
+                # but retaining the decay/importance multipliers if needed. But cross encoder score is a logit.
+                r.final_score = float(s)
+            
+            results.sort(key=lambda x: x.final_score, reverse=True)
+            latency = time.perf_counter() - start_t
+            logger.info("retrieval.hybrid_search.reranked", latency_sec=latency)
+            
         logger.info("retrieval.hybrid_search.complete", hits=len(results))
         return results

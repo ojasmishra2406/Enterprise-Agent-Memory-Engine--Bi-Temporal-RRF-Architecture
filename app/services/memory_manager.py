@@ -107,6 +107,8 @@ class MemoryManager:
                     om.superseded_by_id = n_mem.id
                     super_ids.append(om.id)
                     
+                await self.db.flush()
+                    
             elif act == ResolutionAction.NONE:
                 if t_ids:
                     match_stmt = select(Memory).where(Memory.id == t_ids[0]).where(Memory.tenant_id == tenant_id).with_for_update()
